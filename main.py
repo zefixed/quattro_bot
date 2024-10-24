@@ -1,10 +1,12 @@
 import configparser
 import telebot
+from telebot import types
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 from models import Base, Client, Card, Transaction, Loan
 import re
 from collections import namedtuple
+from datetime import datetime, timedelta
 
 # Config
 config = configparser.ConfigParser()
@@ -15,10 +17,29 @@ API_TOKEN = config["telegram"]["token"]
 bot = telebot.TeleBot(API_TOKEN)
 
 # DB connection
-alembic = configparser.ConfigParser()
-alembic.read("alembic.ini")
-DATABASE_URL = alembic["alembic"]["sqlalchemy.url"]
-Session = sessionmaker(bind=create_engine(DATABASE_URL))
+try:
+    alembic = configparser.ConfigParser()
+    alembic.read("alembic.ini")
+    DATABASE_URL = alembic["alembic"]["sqlalchemy.url"]
+    Session = sessionmaker(bind=create_engine(DATABASE_URL))
+except Exception as e:
+    print("db error", e)
+    exit()
+
+# Определение команд для меню
+commands = [
+    types.BotCommand("start", "Начать работу с ботом"),
+    types.BotCommand("help", "Помощь"),
+    types.BotCommand("register", "Регистрация"),
+    types.BotCommand("account", "Управление аккаунтом"),
+    types.BotCommand("create_card", "Создание карты"),
+    types.BotCommand("delete_card", "Удаление карты"),
+    types.BotCommand("loan_pay", "Погасить кредит"),
+    types.BotCommand("top_up", "Пополнить карту"),
+]
+
+# Установка команд в меню бота
+bot.set_my_commands(commands)
 
 
 def escape_markdown(text):
@@ -28,11 +49,16 @@ def escape_markdown(text):
     return text
 
 
+def check_client(session, telegram_id) -> bool:
+    client = session.query(Client).filter(Client.telegram_id == telegram_id).first()
+    if not client:
+        return False
+    return True
+
+
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
-    session = Session()
-    data = session.query(Client).all()
-    bot.send_message(message.chat.id, f"Привет! Я ваш Telegram-бот. {data}")
+    bot.send_message(message.chat.id, "Привет! Я банковский бот.")
 
 
 @bot.message_handler(commands=["help"])
@@ -42,6 +68,9 @@ def send_help(message):
         "/help - Получить помощь\n"
         "/register - Зарегистрироваться\n"
         "/account - Посмотреть свой аккаунт\n"
+        "/create_card - Создать карту\n"
+        "/loan_pay - Погасить кредит\n"
+        "/top_up - Пополнить карту\n"
     )
     bot.send_message(message.chat.id, help_text)
 
@@ -115,16 +144,19 @@ def process_email(message, last_name, first_name, patronymic):
 @bot.message_handler(commands=["account"])
 def account(message):
     session = Session()
+    if not check_client(session, message.from_user.id):
+        bot.send_message(message.chat.id, "Вы не зарегистрированы!")
+        return
 
     client_info = (
         session.query(Client).filter(Client.telegram_id == message.from_user.id).one()
     )
-    client_loans = session.query(Loan).filter(Loan.client_id == client_info.id).all()
+    client_loans = (
+        session.query(Loan)
+        .filter(Loan.client_id == client_info.id, Loan.status == "active")
+        .all()
+    )
     client_cards = session.query(Card).filter(Card.client_id == client_info.id).all()
-
-    if not client_info:
-        bot.send_message(message.chat.id, "Вы не зарегистрированы!")
-        return
 
     bot.send_message(
         message.chat.id,
@@ -141,12 +173,274 @@ def account(message):
         + "Карты:\n"
         + "".join(
             [
-                f"{card[0] + 1}. Номер карты: <code>{card[1].card_number}</code>, Дата окончания: {card[1].expiration_date}, Статус: {card[1].status}\n"
+                f"{card[0] + 1}. Номер карты: <code>{card[1].card_number}</code>, Дата окончания: {card[1].expiration_date}, Баланс: {card[1].balance} ₽, Статус: {card[1].status}\n"
                 for card in enumerate(client_cards)
             ]
         ),
         parse_mode="HTML",
     )
+
+
+@bot.message_handler(commands=["create_card"])
+def create_card(message):
+    session = Session()
+    client = (
+        session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
+    )
+    if not check_client(session, message.from_user.id):
+        bot.send_message(message.chat.id, "Вы не зарегистрированы!")
+        return
+
+    last_card = session.query(Card).order_by(Card.id.desc()).first()
+    if not last_card:
+        last_card = Card(card_number="0000000000000000")
+
+    new_card = Card(
+        client_id=client.id,
+        card_number=" ".join(
+            [
+                ("0000000000000000" + str(last_card.id))[-16:][i * 4 : i * 4 + 4]
+                for i in range(4)
+            ]
+        ),
+        expiration_date=datetime.now() + timedelta(days=365),
+    )
+
+    session.add(new_card)
+    session.commit()
+
+    bot.send_message(
+        message.chat.id,
+        f"Карта с номером <code>{new_card.card_number}</code> создана!",
+        parse_mode="HTML",
+    )
+    session.close()
+
+
+@bot.message_handler(commands=["delete_card"])
+def delete_card(message):
+    session = Session()
+    client = (
+        session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
+    )
+    if not check_client(session, message.from_user.id):
+        bot.send_message(message.chat.id, "Вы не зарегистрированы!")
+        return
+
+    cards = session.query(Card).filter(Card.client_id == client.id).all()
+
+    if not cards:
+        bot.send_message(message.chat.id, "У вас нет карт!")
+        return
+
+    markup = types.InlineKeyboardMarkup()
+    for card in cards:
+        markup.add(
+            types.InlineKeyboardButton(
+                card.card_number, callback_data="delete_card_" + str(card.id)
+            )
+        )
+
+    bot.send_message(
+        message.chat.id, "Выберите карту для удаления", reply_markup=markup
+    )
+    session.close()
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_card_"))
+def callback_query_delete_card(call):
+    card_id = int(call.data.split("_")[-1])
+    session = Session()
+    card = session.query(Card).filter(Card.id == card_id).first()
+    if card:
+        session.delete(card)
+        session.commit()
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="Карта успешно удалена!",
+        )
+    session.close()
+
+
+@bot.message_handler(commands=["loan_pay"])
+def loan_pay(message):
+    session = Session()
+    client = (
+        session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
+    )
+    if not check_client(session, message.from_user.id):
+        bot.send_message(message.chat.id, "Вы не зарегистрированы!")
+        return
+
+    loans = (
+        session.query(Loan)
+        .filter(Loan.client_id == client.id, Loan.status == "active")
+        .all()
+    )
+
+    if not loans:
+        bot.send_message(message.chat.id, "У вас нет кредитов!")
+        return
+
+    markup = types.InlineKeyboardMarkup()
+    for loan in loans:
+        markup.add(
+            types.InlineKeyboardButton(
+                f"{loan.amount} ₽, {loan.interest_rate}%, до {loan.due_date}",
+                callback_data="loan_pay_" + str(loan.id),
+            )
+        )
+
+    bot.send_message(
+        message.chat.id, "Выберите кредит для погашения кредита", reply_markup=markup
+    )
+    session.close()
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("loan_pay_"))
+def callback_query_loan_pay(call):
+    loan_id = int(call.data.split("_")[-1])
+    session = Session()
+    loan = session.query(Loan).filter(Loan.id == loan_id).first()
+    cards = session.query(Card).filter(Card.client_id == loan.client_id).all()
+
+    markup = types.InlineKeyboardMarkup()
+    for card in cards:
+        if card.balance >= loan.amount:
+            markup.add(
+                types.InlineKeyboardButton(
+                    f"{card.card_number}, {card.balance} ₽",
+                    callback_data=f"loan_card_{loan.id}_{card.id}",
+                )
+            )
+    if not markup.keyboard:
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="У вас нет карт с достаточным балансом для погашения кредита!",
+        )
+        return
+
+    bot.delete_message(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+    )
+    bot.send_message(
+        call.message.chat.id,
+        f"Выберите карту для погашения кредита {loan.amount} ₽, {loan.interest_rate}%, до {loan.due_date}",
+        reply_markup=markup,
+    )
+    session.close()
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("loan_card_"))
+def callback_query_loan_pay_card(call):
+    loan_id = int(call.data.split("_")[-2])
+    card_id = int(call.data.split("_")[-1])
+    session = Session()
+    loan = session.query(Loan).filter(Loan.id == loan_id).first()
+    card = session.query(Card).filter(Card.id == card_id).first()
+    transaction = Transaction(
+        client_id=card.client_id,
+        amount=loan.amount,
+        transaction_type="loan_pay",
+        recipient_id=card.client_id,
+    )
+    if card:
+        if card.balance >= loan.amount:
+            card.balance -= loan.amount
+            loan.amount = 0
+            loan.status = "paid"
+            loan.due_date = datetime.now()
+            session.commit()
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="Кредит успешно погашен!",
+            )
+    session.add(transaction)
+    session.commit()
+    session.close()
+
+
+@bot.message_handler(commands=["top_up"])
+def top_up(message):
+    session = Session()
+    client = (
+        session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
+    )
+    if not check_client(session, message.from_user.id):
+        bot.send_message(message.chat.id, "Вы не зарегистрированы!")
+        return
+
+    markup = types.InlineKeyboardMarkup()
+    cards = session.query(Card).filter(Card.client_id == client.id).all()
+    for card in cards:
+        markup.add(
+            types.InlineKeyboardButton(
+                f"{card.card_number}, {card.balance} ₽",
+                callback_data="top_up_" + str(card.id),
+            )
+        )
+    if not markup.keyboard:
+        bot.send_message(message.chat.id, "У вас нет карт!")
+        return
+
+    bot.send_message(
+        message.chat.id, "Выберите карту для пополнения баланса", reply_markup=markup
+    )
+    session.close()
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("top_up_"))
+def callback_query_top_up(call):
+    card_id = int(call.data.split("_")[-1])
+    session = Session()
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="Введите сумму пополнения баланса:",
+    )
+    bot.register_next_step_handler(
+        call.message,
+        finish_top_up,
+        card_id=card_id,
+        session=session,
+    )
+
+
+def finish_top_up(message, card_id, session):
+    try:
+        amount = int(message.text)
+    except ValueError:
+        bot.send_message(
+            message.chat.id,
+            "Сумма пополнения должна быть целым числом!",
+        )
+        bot.register_next_step_handler(
+            message, finish_top_up, card_id=card_id, session=session
+        )
+
+    card = session.query(Card).filter(Card.id == card_id).first()
+    if card:
+        card.balance += amount
+        session.commit()
+        bot.send_message(
+            message.chat.id,
+            f"Баланс карты <code>{card.card_number}</code> пополнен на {amount} ₽, текущий баланс: {card.balance} ₽",
+            parse_mode="HTML",
+        )
+
+    transaction = Transaction(
+        client_id=card.client_id,
+        amount=amount,
+        transaction_type="top_up",
+        recipient_id=card.client_id,
+    )
+    session.add(transaction)
+    session.commit()
+    session.close()
 
 
 if __name__ == "__main__":
