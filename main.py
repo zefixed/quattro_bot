@@ -1,11 +1,10 @@
 import configparser
 import telebot
 from telebot import types
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models import Base, Client, Card, Transaction, Loan
+from models import Client, Card, Transaction, Loan
 import re
-from collections import namedtuple
 from datetime import datetime, timedelta
 
 # Config
