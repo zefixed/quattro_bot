@@ -35,6 +35,7 @@ commands = [
     types.BotCommand("delete_card", "Удаление карты"),
     types.BotCommand("loan_pay", "Погасить кредит"),
     types.BotCommand("top_up", "Пополнить карту"),
+    types.BotCommand("transfer", "Перевод с карты на карту"),
 ]
 
 # Установка команд в меню бота
@@ -70,6 +71,7 @@ def send_help(message):
         "/create_card - Создать карту\n"
         "/loan_pay - Погасить кредит\n"
         "/top_up - Пополнить карту\n"
+        "/transfer - Перевод с карты на карту"
     )
     bot.send_message(message.chat.id, help_text)
 
@@ -440,6 +442,124 @@ def finish_top_up(message, card_id, session):
     session.add(transaction)
     session.commit()
     session.close()
+
+
+@bot.message_handler(commands=["transfer"])
+def transfer(message):
+    session = Session()
+    client = (
+        session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
+    )
+
+    if not check_client(session, message.from_user.id):
+        bot.send_message(message.chat.id, "Вы не зарегистрированы!")
+        return
+
+    cards_from = session.query(Card).filter(Card.client_id == client.id).all()
+    markup = types.InlineKeyboardMarkup()
+    for card in cards_from:
+        markup.add(
+            types.InlineKeyboardButton(
+                f"{card.card_number}, {card.balance} ₽",
+                callback_data="transfer_" + str(card.id),
+            )
+        )
+    if not markup.keyboard:
+        bot.send_message(message.chat.id, "У вас нет карт!")
+        return
+
+    bot.send_message(
+        message.chat.id,
+        "Выберите карту отправителя:",
+        reply_markup=markup,
+    )
+    session.close()
+    # bot.register_next_step_handler(message, process_card_from)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("transfer_"))
+def process_card_from(call):
+    session = Session()
+    card_from = (
+        session.query(Card).filter(Card.id == int(call.data.split("_")[-1])).first()
+    )
+    if not card_from:
+        bot.send_message(call.message.chat.id, "Карта не найдена!")
+        return
+
+    bot.send_message(call.message.chat.id, "Введите номер карты получателя:")
+    bot.register_next_step_handler(
+        call.message, process_transfer, session=session, card_from=card_from
+    )
+
+
+def process_transfer(message, session, card_from):
+    card_number = message.text
+
+    card_to = session.query(Card).filter(Card.card_number == card_number).first()
+    if not card_to:
+        bot.send_message(message.chat.id, "Карта не найдена!")
+        return
+
+    bot.send_message(message.chat.id, "Введите сумму перевода:")
+    bot.register_next_step_handler(
+        message, finish_transfer, card_to=card_to, session=session, card_from=card_from
+    )
+
+
+def finish_transfer(message, card_to, session, card_from):
+    try:
+        amount = float(message.text)
+        if amount <= 0:
+            bot.send_message(
+                message.chat.id,
+                "Сумма перевода должна быть больше нуля!",
+            )
+            bot.register_next_step_handler(
+                message,
+                finish_transfer,
+                card_to=card_to,
+                session=session,
+                card_from=card_from,
+            )
+            return
+        if amount > card_from.balance:
+            bot.send_message(
+                message.chat.id,
+                "Недостаточно средств!",
+            )
+            bot.register_next_step_handler(
+                message,
+                finish_transfer,
+                card_to=card_to,
+                session=session,
+                card_from=card_from,
+            )
+            return
+    except ValueError:
+        bot.send_message(
+            message.chat.id,
+            "Сумма перевода должна быть целым числом!",
+        )
+        bot.register_next_step_handler(
+            message, finish_transfer, card_to, session, card_from
+        )
+
+    card_from.balance -= amount
+    card_to.balance += amount
+    transaction = Transaction(
+        client_id=card_from.client_id,
+        amount=amount,
+        transaction_type="transfer",
+        recipient_id=card_to.client_id,
+    )
+    session.add(transaction)
+    session.commit()
+    bot.send_message(
+        message.chat.id,
+        f"Перевод с карты <code>{card_from.card_number}</code> на карту <code>{card_to.card_number}</code> выполнен, текущий баланс: {card_from.balance} ₽",
+        parse_mode="HTML",
+    )
 
 
 if __name__ == "__main__":
