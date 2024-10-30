@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from models import Client, Card, Transaction, Loan
 import re
 from datetime import datetime, timedelta
+from logger import log_message_info
 
 # Config
 config = configparser.ConfigParser()
@@ -58,6 +59,7 @@ def check_client(session, telegram_id) -> bool:
 
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
+    log_message_info(message)
     bot.send_message(message.chat.id, "Привет! Я банковский бот.")
 
 
@@ -422,6 +424,7 @@ def finish_top_up(message, card_id, session):
         bot.register_next_step_handler(
             message, finish_top_up, card_id=card_id, session=session
         )
+        return
 
     card = session.query(Card).filter(Card.id == card_id).first()
     if card:
@@ -560,6 +563,35 @@ def finish_transfer(message, card_to, session, card_from):
         f"Перевод с карты <code>{card_from.card_number}</code> на карту <code>{card_to.card_number}</code> выполнен, текущий баланс: {card_from.balance} ₽",
         parse_mode="HTML",
     )
+
+
+@bot.message_handler(
+    content_types=[
+        "text",
+        "photo",
+        "document",
+        "audio",
+        "voice",
+        "video",
+        "video_note",
+        "sticker",
+        "location",
+        "contact",
+        "venue",
+        "animation",
+        "poll",
+        "dice",
+    ]
+)
+def handle_unmatched_message(message):
+    if message.content_type == "text":
+        bot.send_message(message.chat.id, "Я вас не понимаю, попробуйте ещё раз.")
+    else:
+        bot.send_message(
+            message.chat.id,
+            "Я пока не могу обработать этот тип сообщения, попробуйте ещё раз.",
+        )
+    log_message_info(message)
 
 
 if __name__ == "__main__":
