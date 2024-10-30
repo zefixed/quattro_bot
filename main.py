@@ -65,6 +65,7 @@ def send_welcome(message):
 
 @bot.message_handler(commands=["help"])
 def send_help(message):
+    log_message_info(message)
     help_text = (
         "/start - Запустить бота\n"
         "/help - Получить помощь\n"
@@ -80,6 +81,7 @@ def send_help(message):
 
 @bot.message_handler(commands=["register"])
 def register(message):
+    log_message_info(message)
     session = Session()
     client = (
         session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
@@ -95,18 +97,21 @@ def register(message):
 
 
 def process_last_name(message):
+    log_message_info(message)
     last_name = message.text
     bot.send_message(message.chat.id, "Введите ваше имя (first name):")
     bot.register_next_step_handler(message, process_first_name, last_name)
 
 
 def process_first_name(message, last_name):
+    log_message_info(message)
     first_name = message.text
     bot.send_message(message.chat.id, "Введите ваше отчество (patronymic, если есть):")
     bot.register_next_step_handler(message, process_patronymic, last_name, first_name)
 
 
 def process_patronymic(message, first_name, last_name):
+    log_message_info(message)
     patronymic = message.text
     bot.send_message(message.chat.id, "Введите ваш email:")
     bot.register_next_step_handler(
@@ -115,6 +120,7 @@ def process_patronymic(message, first_name, last_name):
 
 
 def process_email(message, last_name, first_name, patronymic):
+    log_message_info(message)
     email = message.text
     # Checking email correctness using a regular expression
     email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
@@ -146,6 +152,7 @@ def process_email(message, last_name, first_name, patronymic):
 
 @bot.message_handler(commands=["account"])
 def account(message):
+    log_message_info(message)
     session = Session()
     if not check_client(session, message.from_user.id):
         bot.send_message(message.chat.id, "Вы не зарегистрированы!")
@@ -186,6 +193,7 @@ def account(message):
 
 @bot.message_handler(commands=["create_card"])
 def create_card(message):
+    log_message_info(message)
     session = Session()
     client = (
         session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
@@ -222,6 +230,7 @@ def create_card(message):
 
 @bot.message_handler(commands=["delete_card"])
 def delete_card(message):
+    log_message_info(message)
     session = Session()
     client = (
         session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
@@ -252,6 +261,7 @@ def delete_card(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("delete_card_"))
 def callback_query_delete_card(call):
+    log_message_info(call.message)
     card_id = int(call.data.split("_")[-1])
     session = Session()
     card = session.query(Card).filter(Card.id == card_id).first()
@@ -268,6 +278,7 @@ def callback_query_delete_card(call):
 
 @bot.message_handler(commands=["loan_pay"])
 def loan_pay(message):
+    log_message_info(message)
     session = Session()
     client = (
         session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
@@ -303,6 +314,7 @@ def loan_pay(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("loan_pay_"))
 def callback_query_loan_pay(call):
+    log_message_info(call.message)
     loan_id = int(call.data.split("_")[-1])
     session = Session()
     loan = session.query(Loan).filter(Loan.id == loan_id).first()
@@ -339,6 +351,7 @@ def callback_query_loan_pay(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("loan_card_"))
 def callback_query_loan_pay_card(call):
+    log_message_info(call.message)
     loan_id = int(call.data.split("_")[-2])
     card_id = int(call.data.split("_")[-1])
     session = Session()
@@ -369,6 +382,7 @@ def callback_query_loan_pay_card(call):
 
 @bot.message_handler(commands=["top_up"])
 def top_up(message):
+    log_message_info(message)
     session = Session()
     client = (
         session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
@@ -398,6 +412,7 @@ def top_up(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("top_up_"))
 def callback_query_top_up(call):
+    log_message_info(call.message)
     card_id = int(call.data.split("_")[-1])
     session = Session()
     bot.edit_message_text(
@@ -414,6 +429,7 @@ def callback_query_top_up(call):
 
 
 def finish_top_up(message, card_id, session):
+    log_message_info(message)
     try:
         amount = int(message.text)
     except ValueError:
@@ -449,6 +465,7 @@ def finish_top_up(message, card_id, session):
 
 @bot.message_handler(commands=["transfer"])
 def transfer(message):
+    log_message_info(message)
     session = Session()
     client = (
         session.query(Client).filter(Client.telegram_id == message.from_user.id).first()
@@ -482,6 +499,7 @@ def transfer(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("transfer_"))
 def process_card_from(call):
+    log_message_info(call.message)
     session = Session()
     card_from = (
         session.query(Card).filter(Card.id == int(call.data.split("_")[-1])).first()
@@ -497,6 +515,7 @@ def process_card_from(call):
 
 
 def process_transfer(message, session, card_from):
+    log_message_info(message)
     card_number = message.text
 
     card_to = session.query(Card).filter(Card.card_number == card_number).first()
@@ -511,6 +530,7 @@ def process_transfer(message, session, card_from):
 
 
 def finish_transfer(message, card_to, session, card_from):
+    log_message_info(message)
     try:
         amount = float(message.text)
         if amount <= 0:
