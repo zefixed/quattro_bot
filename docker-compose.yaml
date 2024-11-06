@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres
+    container_name: quattro_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: quattro
+    volumes:
+      - ./db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - quattro_network
+
+  quattro_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quattro_bot
+    environment:
+      DATABASE_URL: postgres://postgres:root@db:5432/quattro
+    depends_on:
+      - db
+    volumes:
+      - ./bot_logs:/bot/logs
+    ports:
+      - "8000:8000"
+    networks:
+      - quattro_network
+
+networks:
+  quattro_network:
+
