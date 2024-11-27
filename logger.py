@@ -42,7 +42,7 @@ def log_message_info(message):
         file_id = message.document.file_id
     elif message.content_type == "audio":
         file_id = message.audio.file_id
-    elif message.content_type == "video":
+    elif message.content_type == "video":  # Видео с наивысшим разрешением
         file_id = message.video.file_id
     elif message.content_type == "voice":
         file_id = message.voice.file_id
