@@ -44,7 +44,8 @@ bot.set_my_commands(commands)
 
 
 def escape_markdown(text):
-    escape_chars = r"._*[]()~>#+-=|{}!`"
+    # escape_chars = r"._*[]()~>#+-=|{}!`"
+    escape_chars = r"._*[]()~>#+-=|{}`"
     for char in escape_chars:
         text = text.replace(char, f"\\{char}")
     return text
